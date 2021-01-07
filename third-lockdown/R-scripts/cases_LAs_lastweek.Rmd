@@ -256,3 +256,4 @@ We will continue working with the data frame in Excel since we have to manually 
 write.csv(sum.cases.alltiers.lastweek, file = "case_numbers_allLAs_last7.csv")
 ```
 
+Continue with the Excel-Sheet [here](https://github.com/vfillis/covid-data/blob/main/third-lockdown/Excel-Sheets/lookup_for_case_rates_LAs.xlsx). 
