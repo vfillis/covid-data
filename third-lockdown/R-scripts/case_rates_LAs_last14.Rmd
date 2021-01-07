@@ -1,0 +1,321 @@
+---
+title: "Case rates in England's local authorities"
+author: "Vanessa Fillis"
+date: "05/01/2021"
+output: html_notebook
+---
+
+## Activate packages
+
+At first, we will activate necessary packages. 
+
+```{r}
+library(jsonlite)
+library(httr)
+library(dplyr)
+```
+
+## Importing the data
+
+We will import the data of all daily cases in England's local authorities. Data is available for upper-tier and lower-tier local authorities.
+
+### Cases Upper-tier local authorities
+
+Cases by specimen date (regional breakdown of cases is only available by specimen date)
+
+```{r}
+#' Extracts paginated data by requesting all of the pages
+#' and combining the results.
+#'
+#' @param filters    API filters. See the API documentations for 
+#'                   additional information.
+#'                   
+#' @param structure  Structure parameter. See the API documentations 
+#'                   for additional information.
+#'                   
+#' @return list      Comprehensive list of dictionaries containing all 
+#'                   the data for the given ``filter`` and ``structure`.`
+get_paginated_data <- function (filters, structure) {
+  
+    endpoint     <- "https://api.coronavirus.data.gov.uk/v1/data"
+    results      <- list()
+    current_page <- 1
+    
+    repeat {
+
+        httr::GET(
+            url   = endpoint,
+            query = list(
+                filters   = paste(filters, collapse = ";"),
+                structure = jsonlite::toJSON(structure, auto_unbox = TRUE),
+                page      = current_page
+            ),
+            timeout(10)
+        ) -> response
+        
+        # Handle errors:
+        if ( response$status_code >= 400 ) {
+            err_msg = httr::http_status(response)
+            stop(err_msg)
+        } else if ( response$status_code == 204 ) {
+            break
+        }
+        
+        # Convert response from binary to JSON:
+        json_text <- content(response, "text")
+        dt        <- jsonlite::fromJSON(json_text)
+        results   <- rbind(results, dt$data)
+        
+        if ( is.null( dt$pagination$`next` ) ){
+            break
+        }
+        
+        current_page <- current_page + 1;
+
+    }
+    
+    return(results)
+    
+}
+
+# Create filters:
+query_filters <- c(
+    "areaType=utla"
+)
+
+# Create the structure as a list or a list of lists:
+query_structure <- list(
+    date       = "date", 
+    name       = "areaName", 
+    code       = "areaCode", 
+    daily      = "newCasesBySpecimenDate",
+    cumulative = "cumCasesBySpecimenDate"
+)
+
+cases.upperLA <- get_paginated_data(query_filters, query_structure)
+
+list(
+  "Shape"                = dim(cases.upperLA),
+  "Data (first 3 items)" = cases.upperLA[0:3, 0:-1]
+) -> report
+
+print(report)
+
+# Rename columns for better distinction
+cases.upperLA <- cases.upperLA %>%
+  rename(
+    daily.cases = daily,
+    cumulative.cases = cumulative
+  )
+```
+
+### Cases Lower-tier local authorities
+
+Cases by specimen date
+
+```{r}
+#' Extracts paginated data by requesting all of the pages
+#' and combining the results.
+#'
+#' @param filters    API filters. See the API documentations for 
+#'                   additional information.
+#'                   
+#' @param structure  Structure parameter. See the API documentations 
+#'                   for additional information.
+#'                   
+#' @return list      Comprehensive list of dictionaries containing all 
+#'                   the data for the given ``filter`` and ``structure`.`
+get_paginated_data <- function (filters, structure) {
+  
+    endpoint     <- "https://api.coronavirus.data.gov.uk/v1/data"
+    results      <- list()
+    current_page <- 1
+    
+    repeat {
+
+        httr::GET(
+            url   = endpoint,
+            query = list(
+                filters   = paste(filters, collapse = ";"),
+                structure = jsonlite::toJSON(structure, auto_unbox = TRUE),
+                page      = current_page
+            ),
+            timeout(10)
+        ) -> response
+        
+        # Handle errors:
+        if ( response$status_code >= 400 ) {
+            err_msg = httr::http_status(response)
+            stop(err_msg)
+        } else if ( response$status_code == 204 ) {
+            break
+        }
+        
+        # Convert response from binary to JSON:
+        json_text <- content(response, "text")
+        dt        <- jsonlite::fromJSON(json_text)
+        results   <- rbind(results, dt$data)
+        
+        if ( is.null( dt$pagination$`next` ) ){
+            break
+        }
+        
+        current_page <- current_page + 1;
+
+    }
+    
+    return(results)
+    
+}
+
+
+# Create filters:
+query_filters <- c(
+    "areaType=ltla"
+)
+
+# Create the structure as a list or a list of lists:
+query_structure <- list(
+    date       = "date", 
+    name       = "areaName", 
+    code       = "areaCode", 
+    daily      = "newCasesBySpecimenDate",
+    cumulative = "cumCasesBySpecimenDate"
+)
+
+cases.lowerLA <- get_paginated_data(query_filters, query_structure)
+
+list(
+  "Shape"                = dim(cases.lowerLA),
+  "Data (first 3 items)" = cases.lowerLA[0:3, 0:-1]
+) -> report
+
+print(report)
+
+# Rename columns for better distinction
+cases.lowerLA <- cases.lowerLA %>%
+  rename(
+    daily.cases = daily,
+    cumulative.cases = cumulative
+  )
+```
+
+## Remove local authorities from Scotland and Wales
+
+We will only look at local authorities in England. Their code starts with an "E". Therefore we will remove local authorities from Scotland and Wales. 
+
+```{r}
+cases.upperLA$England <- grepl("[E]+", cases.upperLA$code)
+cases.lowerLA$England <- grepl("[E]+", cases.lowerLA$code)
+
+#Remove rows for LAs in Scotland and Wales
+cases.upperLA <- subset(cases.upperLA, cases.upperLA$England == TRUE)
+cases.lowerLA <- subset(cases.lowerLA, cases.lowerLA$England == TRUE)
+```
+
+## Merge upper and lower tier cases
+
+Right now, we have two data frames: one for lower-tier local authorities and one for upper-tier local authorities. We will merge them into one. 
+
+```{r}
+cases.alltiers <- rbind(cases.lowerLA, cases.upperLA)
+```
+
+### Remove duplicate rows
+
+Some local authorities have been falling under lower-tier and upper-tier local authorities. We only want one entry per day for each LA. This is why we are removing duplicate rows using **distinct()**.
+
+```{r}
+cases.alltiers.distinct <- distinct(cases.alltiers)
+```
+
+## Rate of positive cases per 100k population  
+
+We want to calculate the case rate per 100k population for each local authority. To be able to do this we need population estimates for each local authority.
+
+### Import population estimates from mid 2019
+
+Population estimated used are [Office for National Statistics 2019 mid-year estimates](https://www.ons.gov.uk/peoplepopulationandcommunity/populationandmigration/populationestimates/datasets/populationestimatesforukenglandandwalesscotlandandnorthernireland). 
+
+Merging the data frames **cases.alltiers.distint** and **populations.estimates** at a later point will bring results for local authorities except for "Cornwall and Isles of Scilly" and "Hackney and City of London". Population estimates are given for Cornwall and Isles of Scilly individually. The same goes for Hackney and City of London. 
+
+This is why I have added two new rows in the population estimates data frame before its import, manually combining the population numbers for "Cornwall and Isles of Scilly" and "Hackney and City of London", so that it matches the structure of the case data. 
+
+```{r}
+population.estimates <- read.csv("population estimates_mid2019-edited.csv", stringsAsFactors = FALSE)
+
+#Rename column "code" for merging
+population.estimates <- population.estimates %>%
+  rename(code = Code, name = Name)
+```
+
+### Lookup the population for the regions
+
+Note: In the population estimates data set from the ONS there are no population estimates for Aylesbury Vale, Chiltern, South Bucks, and Wycombe in Buckinghamshire. Instead they are all summarised under Buckinghamshire. This is why the **cases.alltiers.pop** data frame has less rows than the previous **cases.alltiers.distinct** data frame. 
+
+```{r}
+cases.alltiers.pop <- merge(cases.alltiers.distinct, population.estimates, by = "name")
+
+#Dropping duplicate columns
+cases.alltiers.pop <- cases.alltiers.pop[-c(6,7,8)]
+
+#Rename column with populations estimates
+cases.alltiers.pop <- cases.alltiers.pop %>%
+  rename(
+    population = All.ages,
+    code = code.x
+  )
+```
+
+### Calculate cases per 100k
+
+Now that we have the daily cases and the population estimates for all areas we can calculate the case rate per 100k. 
+
+We will divide daily cases by population and then multiply with 100,000. 
+
+```{r}
+cases.alltiers.pop$case.rate <- (cases.alltiers.pop$daily.cases/cases.alltiers.pop$population)*100000
+```
+
+### Looking at cases in last 14 days 
+
+We want to know what the case rates have been in the last two week to see if they have been going up or down. 
+
+Data is available up until the 2 January for LAs, so we are looking at the week from 27 December 2020 to 2 January 2021 and the week from 20 December 2020 to 26 December 2020. 
+
+```{r}
+cases.alltiers.lastweek <- subset(cases.alltiers.pop, cases.alltiers.pop$date >= "2020-12-27" & cases.alltiers.pop$date <= "2021-01-02")
+
+cases.alltiers.penultimateweek <- subset(cases.alltiers.pop, cases.alltiers.pop$date >= "2020-12-20" & cases.alltiers.pop$date <= "2020-12-26")
+```
+
+### Sum of case rate in the last and penultimate seven days for each LA
+
+To get the weekly case rates per 100k, we will add up the daily case rates for each local authority in the last seven and penultimate seven days. 
+
+```{r}
+sum.caserate.alltiers.lastweek <- cases.alltiers.lastweek %>%
+  group_by(name) %>%
+  summarise(sum.caserate = sum(case.rate))
+
+sum.caserate.alltiers.penultimateweek <- cases.alltiers.penultimateweek %>%
+  group_by(name) %>%
+  summarise(sum.caserate = sum(case.rate))
+
+#Join both data frames
+sum.caserate.alltiers <- left_join(sum.caserate.alltiers.lastweek, sum.caserate.alltiers.penultimateweek, by = "name", suffix = c(".lastweek", ".penultimateweek"))
+
+#Change last and penultimate week 
+sum.caserate.alltiers$change <- sum.caserate.alltiers$sum.caserate.lastweek - sum.caserate.alltiers$sum.caserate.penultimateweek
+
+#percentage change
+sum.caserate.alltiers$percentagechange <- (sum.caserate.alltiers$change/sum.caserate.alltiers$sum.caserate.penultimateweek)*100
+```
+
+## Export 
+
+```{r}
+write.csv(sum.caserate.alltiers, file = "case_rates_alltiers_last14.csv")
+```
+
+
