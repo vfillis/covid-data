@@ -1,0 +1,258 @@
+---
+title: "Case numbers in England's local authorities"
+author: "Vanessa Fillis"
+date: "05/01/2021"
+output: html_document
+---
+
+## Activate packages
+
+At first, we will activate necessary packages. 
+
+```{r}
+library(jsonlite)
+library(httr)
+library(dplyr)
+```
+
+## Import the data
+
+We will import the data of all daily cases in England's local authorities. Data is available for upper-tier and lower-tier local authorities. We need both of them for the map on Datawrapper. 
+
+### Cases Upper-tier local authorities
+
+Cases by specimen date (regional breakdown of cases is only available by specimen date)
+
+```{r}
+#' Extracts paginated data by requesting all of the pages
+#' and combining the results.
+#'
+#' @param filters    API filters. See the API documentations for 
+#'                   additional information.
+#'                   
+#' @param structure  Structure parameter. See the API documentations 
+#'                   for additional information.
+#'                   
+#' @return list      Comprehensive list of dictionaries containing all 
+#'                   the data for the given ``filter`` and ``structure`.`
+get_paginated_data <- function (filters, structure) {
+  
+    endpoint     <- "https://api.coronavirus.data.gov.uk/v1/data"
+    results      <- list()
+    current_page <- 1
+    
+    repeat {
+
+        httr::GET(
+            url   = endpoint,
+            query = list(
+                filters   = paste(filters, collapse = ";"),
+                structure = jsonlite::toJSON(structure, auto_unbox = TRUE),
+                page      = current_page
+            ),
+            timeout(10)
+        ) -> response
+        
+        # Handle errors:
+        if ( response$status_code >= 400 ) {
+            err_msg = httr::http_status(response)
+            stop(err_msg)
+        } else if ( response$status_code == 204 ) {
+            break
+        }
+        
+        # Convert response from binary to JSON:
+        json_text <- content(response, "text")
+        dt        <- jsonlite::fromJSON(json_text)
+        results   <- rbind(results, dt$data)
+        
+        if ( is.null( dt$pagination$`next` ) ){
+            break
+        }
+        
+        current_page <- current_page + 1;
+
+    }
+    
+    return(results)
+    
+}
+
+# Create filters:
+query_filters <- c(
+    "areaType=utla"
+)
+
+# Create the structure as a list or a list of lists:
+query_structure <- list(
+    date       = "date", 
+    name       = "areaName", 
+    code       = "areaCode", 
+    daily      = "newCasesBySpecimenDate",
+    cumulative = "cumCasesBySpecimenDate"
+)
+
+cases.upperLA <- get_paginated_data(query_filters, query_structure)
+
+list(
+  "Shape"                = dim(cases.upperLA),
+  "Data (first 3 items)" = cases.upperLA[0:3, 0:-1]
+) -> report
+
+print(report)
+
+# Rename columns for better distinction
+cases.upperLA <- cases.upperLA %>%
+  rename(
+    daily.cases = daily,
+    cumulative.cases = cumulative
+  )
+```
+
+### Cases Lower-tier local authorities
+
+Cases by specimen date
+
+```{r}
+#' Extracts paginated data by requesting all of the pages
+#' and combining the results.
+#'
+#' @param filters    API filters. See the API documentations for 
+#'                   additional information.
+#'                   
+#' @param structure  Structure parameter. See the API documentations 
+#'                   for additional information.
+#'                   
+#' @return list      Comprehensive list of dictionaries containing all 
+#'                   the data for the given ``filter`` and ``structure`.`
+get_paginated_data <- function (filters, structure) {
+  
+    endpoint     <- "https://api.coronavirus.data.gov.uk/v1/data"
+    results      <- list()
+    current_page <- 1
+    
+    repeat {
+
+        httr::GET(
+            url   = endpoint,
+            query = list(
+                filters   = paste(filters, collapse = ";"),
+                structure = jsonlite::toJSON(structure, auto_unbox = TRUE),
+                page      = current_page
+            ),
+            timeout(10)
+        ) -> response
+        
+        # Handle errors:
+        if ( response$status_code >= 400 ) {
+            err_msg = httr::http_status(response)
+            stop(err_msg)
+        } else if ( response$status_code == 204 ) {
+            break
+        }
+        
+        # Convert response from binary to JSON:
+        json_text <- content(response, "text")
+        dt        <- jsonlite::fromJSON(json_text)
+        results   <- rbind(results, dt$data)
+        
+        if ( is.null( dt$pagination$`next` ) ){
+            break
+        }
+        
+        current_page <- current_page + 1;
+
+    }
+    
+    return(results)
+    
+}
+
+
+# Create filters:
+query_filters <- c(
+    "areaType=ltla"
+)
+
+# Create the structure as a list or a list of lists:
+query_structure <- list(
+    date       = "date", 
+    name       = "areaName", 
+    code       = "areaCode", 
+    daily      = "newCasesBySpecimenDate",
+    cumulative = "cumCasesBySpecimenDate"
+)
+
+cases.lowerLA <- get_paginated_data(query_filters, query_structure)
+
+list(
+  "Shape"                = dim(cases.lowerLA),
+  "Data (first 3 items)" = cases.lowerLA[0:3, 0:-1]
+) -> report
+
+print(report)
+
+# Rename columns for better distinction
+cases.lowerLA <- cases.lowerLA %>%
+  rename(
+    daily.cases = daily,
+    cumulative.cases = cumulative
+  )
+```
+
+## Remove local authorities from Scotland and Wales
+
+We will only look at local authorities in England. Their code starts with an "E". Therefore we will remove local authorities from Scotland and Wales. 
+
+```{r}
+cases.upperLA$England <- grepl("[E]+", cases.upperLA$code)
+cases.lowerLA$England <- grepl("[E]+", cases.lowerLA$code)
+
+#Remove rows for LAs in Scotland and Wales
+cases.upperLA <- subset(cases.upperLA, cases.upperLA$England == TRUE)
+cases.lowerLA <- subset(cases.lowerLA, cases.lowerLA$England == TRUE)
+```
+
+## Merge upper and lower tier cases
+
+Right now, we have two data frames: one for lower-tier local authorities and one for upper-tier local authorities. We will merge them into one. 
+
+```{r}
+cases.alltiers <- rbind(cases.lowerLA, cases.upperLA)
+```
+
+### Remove duplicate rows
+
+Some local authorities have been falling under lower-tier and upper-tier local authorities. We only want one entry per day for each LA. This is why we are removing duplicate rows using **distinct()**.
+
+```{r}
+cases.alltiers.distinct <- distinct(cases.alltiers)
+```
+
+## Filter for cases in the last week
+
+We want to know how the cases have been in the last week to create a map showing the latest weekly case rate per 100k. Data is available up until the 2 January for LAs, so we are looking at the week from 27 December 2020 to 2 January 2021. 
+
+```{r}
+#lastweek
+cases.alltiers.lastweek <- subset(cases.alltiers.distinct, cases.alltiers.distinct$date >= "2020-12-27" & cases.alltiers.distinct$date <= "2021-01-02")
+```
+
+### Sum of case numbers in the last 7 days for each LA
+
+To calculate the weekly case rates per 100k in a next step, we first have to add up all new daily cases for each local authority in the last seven days. This will be the basis for the case rate calculations that will take place in Excel. 
+
+```{r}
+sum.cases.alltiers.lastweek <- cases.alltiers.lastweek %>%
+  group_by(name) %>%
+  summarise(sum.cases = sum(daily.cases))
+```
+
+## Export
+
+We will continue working with the data frame in Excel since we have to manually look up which local authorities form a county that is displayed on the map. For each area on the map, we will look up population data to calculate case rates per 100k.  
+
+```{r}
+write.csv(sum.cases.alltiers.lastweek, file = "case_numbers_allLAs_last7.csv")
+```
+
