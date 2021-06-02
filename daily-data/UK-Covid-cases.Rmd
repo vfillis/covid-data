@@ -1,0 +1,204 @@
+---
+title: "UK Covid cases"
+author: "Vanessa Fillis"
+date: "02/06/2021"
+output: html_document
+---
+
+# Daily Covid cases in the UK 
+
+## Activate packages
+
+```{r}
+library(jsonlite)
+library(httr)
+library(dplyr)
+library(zoo)
+```
+
+## Getting the data 
+
+Cases by date reported
+
+```{r}
+#' Extracts paginated data by requesting all of the pages
+#' and combining the results.
+#'
+#' @param filters    API filters. See the API documentations for 
+#'                   additional information.
+#'                   
+#' @param structure  Structure parameter. See the API documentations 
+#'                   for additional information.
+#'                   
+#' @return list      Comprehensive list of dictionaries containing all 
+#'                   the data for the given ``filter`` and ``structure`.`
+get_paginated_data <- function (filters, structure) {
+  
+    endpoint     <- "https://api.coronavirus.data.gov.uk/v1/data"
+    results      <- list()
+    current_page <- 1
+    
+    repeat {
+        httr::GET(
+            url   = endpoint,
+            query = list(
+                filters   = paste(filters, collapse = ";"),
+                structure = jsonlite::toJSON(structure, auto_unbox = TRUE),
+                page      = current_page
+            ),
+            timeout(10)
+        ) -> response
+        
+        # Handle errors:
+        if ( response$status_code >= 400 ) {
+            err_msg = httr::http_status(response)
+            stop(err_msg)
+        } else if ( response$status_code == 204 ) {
+            break
+        }
+        
+        # Convert response from binary to JSON:
+        json_text <- content(response, "text")
+        dt        <- jsonlite::fromJSON(json_text)
+        results   <- rbind(results, dt$data)
+        
+        if ( is.null( dt$pagination$`next` ) ){
+            break
+        }
+    
+        current_page <- current_page + 1;
+    }
+    
+    return(results)
+    
+}
+# Create filters:
+query_filters <- c(
+    "areaType=nation"
+)
+
+# Create the structure as a list or a list of lists:
+query_structure <- list(
+    date       = "date", 
+    name       = "areaName", 
+    code       = "areaCode", 
+    daily     = "newCasesByPublishDate",
+    cumulative = "cumCasesByPublishDate"
+)
+cases <- get_paginated_data(query_filters, query_structure)
+list(
+  "Shape"                = dim(cases),
+  "Data (first 3 items)" = cases[0:3, 0:-1]
+) -> report
+print(report)
+#Rename columns for better distinction
+cases <- cases %>%
+  rename(
+    daily.cases.specimen = daily,
+    cumulative.cases.specimen = cumulative
+  )
+```
+
+## Summarise for UK
+
+```{r}
+cases.UK <- cases %>%
+  group_by(name) %>%
+  group_by(date) %>%
+  summarise(sum.daily.cases = sum(daily.cases.specimen))
+```
+
+## Calculating 7 day average
+
+```{r}
+cases.UK <- cases.UK %>%
+  dplyr::arrange(desc(date)) %>% 
+  dplyr::mutate(cases_07da = zoo::rollmean(sum.daily.cases, k = 7, align="left", fill = NA)) 
+```
+
+## Export UK
+
+```{r}
+write.csv(cases.UK, file = "cases-UK.csv")
+```
+
+## Filter for England
+
+```{r}
+cases.England <- subset(cases, cases$name == "England")
+```
+
+## Calculating 7 day average
+
+```{r}
+cases.England <- cases.England %>%
+  #dplyr::arrange(desc(date)) %>% 
+  dplyr::mutate(cases_07da = zoo::rollmean(daily.cases.specimen, k = 7, align="left", fill = NA)) 
+```
+
+## Export England
+
+```{r}
+write.csv(cases.England, file = "cases-England.csv")
+```
+
+## Filter for Scotland
+
+```{r}
+cases.Scotland <- subset(cases, cases$name == "Scotland")
+```
+
+## Calculating 7 day average
+
+```{r}
+cases.Scotland <- cases.Scotland %>%
+  #dplyr::arrange(desc(date)) %>% 
+  dplyr::mutate(cases_07da = zoo::rollmean(daily.cases.specimen, k = 7, align="left", fill = NA)) 
+```
+
+## Export Scotland
+
+```{r}
+write.csv(cases.Scotland, file = "cases-Scotland.csv")
+```
+
+## Filter for Wales
+
+```{r}
+cases.Wales <- subset(cases, cases$name == "Wales")
+```
+
+## Calculating 7 day average
+
+```{r}
+cases.Wales <- cases.Wales %>%
+  #dplyr::arrange(desc(date)) %>% 
+  dplyr::mutate(cases_07da = zoo::rollmean(daily.cases.specimen, k = 7, align="left", fill = NA)) 
+```
+
+## Export Wales
+
+```{r}
+write.csv(cases.Wales, file = "cases-Wales.csv")
+```
+
+## Filter for Northern Ireland
+
+```{r}
+cases.NI <- subset(cases, cases$name == "Northern Ireland")
+```
+
+## Calculating 7 day average
+
+```{r}
+cases.NI <- cases.NI %>%
+  #dplyr::arrange(desc(date)) %>% 
+  dplyr::mutate(cases_07da = zoo::rollmean(daily.cases.specimen, k = 7, align="left", fill = NA)) 
+```
+
+## Export Northern Ireland
+
+```{r}
+write.csv(cases.NI, file = "cases-Northern-Ireland.csv")
+```
+
