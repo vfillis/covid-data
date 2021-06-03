@@ -1,0 +1,139 @@
+---
+title: "Bolton NHS Foundation Trust Patients"
+author: "Vanessa Fillis"
+date: "01/06/2021"
+output: html_document
+---
+
+# Bolton NHS Foundation Trust Patients
+
+## Activating necessary packages 
+
+```{r}
+library(jsonlite)
+library(httr)
+library(dplyr)
+```
+
+## Downloading the data 
+
+Downloading the data from https://coronavirus.data.gov.uk using the API. 
+
+## Healthcare Data NHS regions
+
+includes:
+- New admissions: Daily numbers of COVID-19 patients admitted to hospital
+- COVID-19 occupied beds with mechanical ventilators: Confirmed COVID-19 patients in mechanical ventilation beds
+- Hospital cases: Daily count of confirmed COVID-19 patients in hospital at midnight the preceding night
+
+```{r}
+#' Extracts paginated data by requesting all of the pages
+#' and combining the results.
+#'
+#' @param filters    API filters. See the API documentations for 
+#'                   additional information.
+#'                   
+#' @param structure  Structure parameter. See the API documentations 
+#'                   for additional information.
+#'                   
+#' @return list      Comprehensive list of dictionaries containing all 
+#'                   the data for the given ``filter`` and ``structure`.`
+get_paginated_data <- function (filters, structure) {
+  
+    endpoint     <- "https://api.coronavirus.data.gov.uk/v1/data"
+    results      <- list()
+    current_page <- 1
+    
+    repeat {
+        httr::GET(
+            url   = endpoint,
+            query = list(
+                filters   = paste(filters, collapse = ";"),
+                structure = jsonlite::toJSON(structure, auto_unbox = TRUE),
+                page      = current_page
+            ),
+            timeout(10)
+        ) -> response
+        
+        # Handle errors:
+        if ( response$status_code >= 400 ) {
+            err_msg = httr::http_status(response)
+            stop(err_msg)
+        } else if ( response$status_code == 204 ) {
+            break
+        }
+        
+        # Convert response from binary to JSON:
+        json_text <- content(response, "text")
+        dt        <- jsonlite::fromJSON(json_text)
+        results   <- rbind(results, dt$data)
+        
+        if ( is.null( dt$pagination$`next` ) ){
+            break
+        }
+    
+        current_page <- current_page + 1;
+    }
+    
+    return(results)
+    
+}
+# Create filters:
+query_filters <- c(
+    "areaType=nhsTrust"
+)
+# Create the structure as a list or a list of lists:
+query_structure <- list(
+    date       = "date", 
+    name       = "areaName", 
+    code       = "areaCode", 
+    admissions = "newAdmissions",
+    mvbeds     = "covidOccupiedMVBeds",
+    hospcases  = "hospitalCases"
+)
+trusts <- get_paginated_data(query_filters, query_structure)
+list(
+  "Shape"                = dim(trusts),
+  "Data (first 3 items)" = trusts[0:3, 0:-1]
+) -> report
+print(report)
+#Rename columns for better distinction
+trusts <- trusts %>%
+  rename(
+    daily.newAdmissions = admissions,
+    daily.covidOccupiedMVBeds = mvbeds,
+    daily.hospitalCases = hospcases
+  )
+```
+
+## Filter for Bolton NHS Foundation Trust
+
+```{r}
+bolton <- subset(trusts, trusts$name == "Bolton NHS Foundation Trust")
+```
+
+## Delete and rename columns 
+
+```{r}
+#bolton <- bolton[-c(3,4)]
+
+bolton <- bolton %>%
+  rename(
+    'Covid patients in hospital' = daily.hospitalCases,
+    'Covid patients in MV beds' = daily.covidOccupiedMVBeds
+  )
+```
+
+## Only include data from 1 January 2021
+
+```{r}
+bolton <- subset(bolton, bolton$date >= "2021-01-01")
+```
+
+
+## Export
+
+```{r}
+write.csv(bolton, file = "bolton-healthcare.csv")
+```
+
