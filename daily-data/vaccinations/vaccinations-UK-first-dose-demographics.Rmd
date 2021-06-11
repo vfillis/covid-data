@@ -1,0 +1,157 @@
+---
+title: "spectator-task-4"
+author: "Vanessa Fillis"
+date: "10/06/2021"
+output: html_document
+---
+
+# Cumulative figures of those who have had a first dose broken down by age: a) 60+, b) under 30 c) 30-59
+
+## Activating packages
+
+```{r}
+library(jsonlite)
+library(httr)
+library(dplyr)
+library(zoo)
+library(tidyr)
+library(purrr)
+```
+
+## Importing the data 
+
+```{r}
+#' Extracts paginated data by requesting all of the pages
+#' and combining the results.
+#'
+#' @param filters    API filters. See the API documentations for 
+#'                   additional information.
+#'                   
+#' @param structure  Structure parameter. See the API documentations 
+#'                   for additional information.
+#'                   
+#' @return list      Comprehensive list of dictionaries containing all 
+#'                   the data for the given ``filter`` and ``structure`.`
+get_paginated_data <- function (filters, structure) {
+  
+    endpoint     <- "https://api.coronavirus.data.gov.uk/v1/data"
+    results      <- list()
+    current_page <- 1
+    
+    repeat {
+        httr::GET(
+            url   = endpoint,
+            query = list(
+                filters   = paste(filters, collapse = ";"),
+                structure = jsonlite::toJSON(structure, auto_unbox = TRUE),
+                page      = current_page
+            ),
+            timeout(10)
+        ) -> response
+        
+        # Handle errors:
+        if ( response$status_code >= 400 ) {
+            err_msg = httr::http_status(response)
+            stop(err_msg)
+        } else if ( response$status_code == 204 ) {
+            break
+        }
+        
+        # Convert response from binary to JSON:
+        json_text <- content(response, "text")
+        dt        <- jsonlite::fromJSON(json_text)
+        results   <- rbind(results, dt$data)
+        
+        if ( is.null( dt$pagination$`next` ) ){
+            break
+        }
+    
+        current_page <- current_page + 1;
+    }
+    
+    return(results)
+    
+}
+# Create filters:
+query_filters <- c(
+    "areaType=nation",
+    "areaName=England"
+)
+
+# Create the structure as a list or a list of lists:
+query_structure <- list(
+    date       = "date", 
+    name       = "areaName",
+    #code       = "areaCode"
+    vaccination.ages = "vaccinationsAgeDemographics"
+    #cumPeopleVaccinatedFirstDoseByVaccinationDate
+)
+
+vaccinations.UK <- get_paginated_data(query_filters, query_structure)
+list(
+  "Shape"                = dim(vaccinations.UK),
+  "Data (first 3 items)" = vaccinations.UK[0:3, 0:-1]
+) -> report
+print(report)
+
+```
+
+## Unnest the data frame
+
+The data frame is nested, so we need to unnest it 
+
+```{r}
+vaccinations.UK <- vaccinations.UK %>%
+  unnest(vaccination.ages)
+```
+
+## Delete metrics we don't need 
+
+Only want to look at the cumulative figures of those who have had a first dose
+
+```{r}
+vaccinations.UK <- vaccinations.UK[-c(4:6,8:13)]
+```
+
+
+## Combine age groups 
+
+We want to look at three age groups:
+
+a) 60+
+b) under 30 
+c) 30-59
+
+```{r}
+vaccinations.UK.under30 <- subset(vaccinations.UK, vaccinations.UK$age == "18_24" | vaccinations.UK$age == "25_29")
+
+vaccinations.UK.under30 <- vaccinations.UK.under30 %>%
+  group_by(date) %>%
+  summarise(under30 = sum(cumPeopleVaccinatedFirstDoseByVaccinationDate))
+
+vaccinations.UK.30to59 <- subset(vaccinations.UK, vaccinations.UK$age == "30_34" | vaccinations.UK$age == "35_39" | vaccinations.UK$age == "40_44" | vaccinations.UK$age == "45_49" | vaccinations.UK$age == "50_54" | vaccinations.UK$age == "55_59")
+
+vaccinations.UK.30to59 <- vaccinations.UK.30to59 %>%
+  group_by(date) %>%
+  summarise(v30to59 = sum(cumPeopleVaccinatedFirstDoseByVaccinationDate))
+
+vaccinations.UK.over60 <- subset(vaccinations.UK, vaccinations.UK$age == "60_64" | vaccinations.UK$age == "65_69" | vaccinations.UK$age == "70_74" | vaccinations.UK$age == "75_79" | vaccinations.UK$age == "80_84" | vaccinations.UK$age == "85_89" | vaccinations.UK$age == "90+")
+
+vaccinations.UK.over60 <- vaccinations.UK.over60 %>%
+  group_by(date) %>%
+  summarise(over60 = sum(cumPeopleVaccinatedFirstDoseByVaccinationDate))
+
+```
+
+## Merge the three frames
+
+```{r}
+vaccinations.UK.groups <- merge(merge(vaccinations.UK.under30, vaccinations.UK.30to59, by = "date"), vaccinations.UK.over60, by = "date")
+```
+
+## Export 
+
+```{r}
+write.csv(vaccinations.UK.groups, file = "vaccinations-UK-first-dose-demographics.csv")
+```
+
